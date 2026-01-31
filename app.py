@@ -141,4 +141,13 @@ if not df_raw.empty:
     # Descarga de datos
     st.sidebar.divider()
     header = f"""Total Patients Collected: {total_coll}
-Patients Accepted: {acc_n
+Patients Accepted: {acc_n}
+Total Earnings: ${money:.2f}
+"""
+    csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
+    st.sidebar.download_button("📥 Descargar Resumen", header + csv_body, f"Reporte_{client}_{category}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
+
+    with st.expander("🔍 Ver Tabla de Datos"):
+        st.dataframe(df_f.drop(columns=['date_str', 'p_num', 'Week']), use_container_width=True)
+else:
+    st.warning("No hay datos que coincidan con los filtros seleccionados.")
