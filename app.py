@@ -12,41 +12,39 @@ CLIENTS = {
     "Cruz": st.secrets.get("URL_CRUZ", "").strip()
 }
 
-# --- SIDEBAR SETTINGS ---
-st.sidebar.header("🛠️ Dashboard Configuration")
-selected_client = st.sidebar.selectbox("1. Select Client", list(CLIENTS.keys()))
-
-# 2. FUNCIÓN PARA DETECTAR TODAS LAS PESTAÑAS (NUEVA)
-def get_all_sheet_names(base_url):
+# 2. FUNCIÓN PARA DETECTAR NOMBRES DE PESTAÑAS (Versión mejorada)
+@st.cache_data(ttl=300) # Cache de 5 minutos para nombres de hojas
+def fetch_sheet_names(url):
     try:
-        # Usamos el endpoint de visualización de Google para obtener metadatos
-        meta_url = f"{base_url}/gviz/tq?tqx=out:csv&tq=select%20*"
-        # Nota: Para obtener nombres de hojas dinámicamente sin API Key, 
-        # lo más robusto en Streamlit es dejar que el usuario escriba o 
-        # pre-cargar las conocidas, pero aquí intentaremos una técnica de scrape ligero:
-        response = requests.get(base_url)
-        # Buscamos nombres de hojas dentro del HTML de Google Sheets
-        sheets = re.findall(r'gid=\d+&sheet=([^"]+)', response.text)
+        # Intentamos extraer nombres de hojas del código fuente de la página de Google
+        response = requests.get(url, timeout=10)
+        # Regex para capturar nombres entre comillas después de 'sheet=' o en el JSON de metadatos
+        sheets = re.findall(r'name\\":\\"(.*?)\\"', response.text)
         if not sheets:
-            # Si falla el scrape, devolvemos las básicas por defecto
+            # Fallback a los nombres conocidos si el scrape falla
             return ["Patients", "Casts"]
-        return list(set([requests.utils.unquote(s) for s in sheets]))
+        # Filtrar nombres duplicados o basura técnica de Google
+        valid_sheets = [s for s in sheets if len(s) > 1 and "\\" not in s]
+        return list(dict.fromkeys(valid_sheets)) # Elimina duplicados manteniendo orden
     except:
         return ["Patients", "Casts"]
 
-# 3. INTERFAZ DINÁMICA
+# --- SIDEBAR ---
+st.sidebar.header("🛠️ Dashboard Control")
+selected_client = st.sidebar.selectbox("1. Select Client", list(CLIENTS.keys()))
+
 url = CLIENTS[selected_client]
 
 if not url:
-    st.warning("⚠️ No URL found in Secrets.")
+    st.warning("⚠️ Please configure the URL in Streamlit Secrets.")
 else:
-    # Obtenemos las pestañas actuales del archivo
-    available_sheets = get_all_sheet_names(url)
+    # Obtener pestañas reales
+    all_sheets = fetch_sheet_names(url)
     
-    # El usuario ahora selecciona de una lista REAL de lo que hay en Google
-    category = st.sidebar.selectbox("2. Select Category (Auto-detected)", available_sheets)
-
-    pay_per_scan = st.sidebar.number_input("3. Payment per approved scan ($/€)", value=0.50, step=0.05)
+    # SELECTOR ÚNICO (Para evitar confusión entre pestañas)
+    current_sheet = st.sidebar.selectbox("2. Select Category / Sheet", all_sheets)
+    
+    pay_per_scan = st.sidebar.number_input("3. Payment per approved scan", value=0.50, step=0.05)
 
     quality_colors = {
         'APPROVED': '#28a745',
@@ -54,60 +52,86 @@ else:
         'REPPROVED': '#dc3545'
     }
 
-    # 4. DATA LOADING FUNCTION
+    # 3. CARGA DE DATOS POR CATEGORÍA SELECCIONADA
     @st.cache_data(ttl=60)
-    def load_data(base_url, sheet_name):
+    def get_data_safe(base_url, sheet_name):
         try:
-            export_url = f"{base_url}/gviz/tq?tqx=out:csv&sheet={sheet_name.replace(' ', '%20')}"
+            # URL de exportación directa codificando el nombre de la hoja
+            sheet_encoded = sheet_name.replace(' ', '%20')
+            export_url = f"{base_url}/gviz/tq?tqx=out:csv&sheet={sheet_encoded}"
+            
             df = pd.read_csv(export_url)
             if df.empty: return pd.DataFrame()
-            
+
             df.columns = [str(c).strip() for c in df.columns]
-            # Buscamos la columna de ID (puede ser Patient, Cast, o la primera que encuentre)
+            
+            # Buscamos la columna de ID (Patient, Cast, o la primera)
             col_id = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
             
-            def get_date(text):
-                match = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
-                return match.group(1) if match else None
+            # Extraer fecha YYYY_MM_DD
+            def extract_date(text):
+                m = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
+                return m.group(1) if m else None
 
-            df['date_str'] = df[col_id].apply(get_date)
+            df['date_str'] = df[col_id].apply(extract_date)
             df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
             df = df.dropna(subset=['Date'])
             df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
+            
             return df
         except:
             return pd.DataFrame()
 
-    # Carga de datos
-    df_raw = load_data(url, category)
+    # Cargar los datos de la pestaña seleccionada
+    df_data = get_data_safe(url, current_sheet)
 
-    if not df_raw.empty:
-        # Filtro de fecha
-        st.sidebar.subheader("4. Date Range")
-        start_date, end_date = st.sidebar.date_input("Select Range", [df_raw['Date'].min(), df_raw['Date'].max()])
+    if not df_data.empty:
+        # 4. RANGO DE FECHAS (Dinámico)
+        st.sidebar.subheader("4. Filter Dates")
+        min_date = df_data['Date'].min().date()
+        max_date = df_data['Date'].max().date()
         
-        mask = (df_raw['Date'].dt.date >= start_date) & (df_raw['Date'].dt.date <= end_date)
-        df = df_raw.loc[mask]
+        # Seleccionamos rango
+        date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
+        
+        # Filtrar dataframe
+        if len(date_range) == 2:
+            df_filtered = df_data[(df_data['Date'].dt.date >= date_range[0]) & 
+                                  (df_data['Date'].dt.date <= date_range[1])]
+        else:
+            df_filtered = df_data
 
-        # --- DASHBOARD UI ---
-        st.title(f"📊 {selected_client}: {category}")
+        # --- MOSTRAR DASHBOARD ---
+        st.title(f"📊 {selected_client}: {current_sheet}")
         
         # Métricas
-        appr = len(df[df['Quality Check (um)'] == 'APPROVED'])
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Scans", len(df))
-        m2.metric("Approved ✅", appr)
-        m3.metric("Total Payment", f"${appr * pay_per_scan:,.2f}")
+        total_s = len(df_filtered)
+        appr_s = len(df_filtered[df_filtered['Quality Check (um)'] == 'APPROVED'])
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Scans", total_s)
+        col2.metric("Approved ✅", appr_s)
+        col3.metric("Earnings", f"${appr_s * pay_per_scan:,.2f}")
 
         # Gráficos
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            fig_bar = px.bar(df, x='Week', color='Quality Check (um)', barmode='group', color_discrete_map=quality_colors)
+        left_c, right_c = st.columns([2, 1])
+        
+        with left_c:
+            st.subheader("Weekly Trend")
+            fig_bar = px.bar(df_filtered, x='Week', color='Quality Check (um)', 
+                            barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig_bar, use_container_width=True)
-        with c2:
-            fig_pie = px.pie(df, names='Quality Check (um)', color='Quality Check (um)', color_discrete_map=quality_colors)
+
+        with right_c:
+            st.subheader("Quality Distribution")
+            fig_pie = px.pie(df_filtered, names='Quality Check (um)', 
+                            color='Quality Check (um)', color_discrete_map=quality_colors)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-        st.dataframe(df.drop(columns=['date_str']), use_container_width=True)
+        # Tabla de datos
+        with st.expander("🔍 Click to see raw data"):
+            st.dataframe(df_filtered.drop(columns=['date_str']), use_container_width=True)
+
     else:
-        st.info(f"The sheet '{category}' was detected but it seems empty or doesn't follow the date format (YYYY_MM_DD).")
+        st.error(f"No valid data found in '{current_sheet}'. Verify that the column names and date format (YYYY_MM_DD) are correct.")
+        st.info("Note: Your Google Sheet must be 'Public' (Anyone with the link can view).")
