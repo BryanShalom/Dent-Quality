@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import plotly.express as px
 import re
@@ -22,21 +21,33 @@ quality_colors = {
     'REPPROVED': '#dc3545'
 }
 
-# 2. DATA LOADING (Simplest Method)
+# 2. DATA LOADING (Direct Export Method - More reliable)
 @st.cache_data(ttl=60)
-def load_data(spreadsheet_url, worksheet_name):
+def load_data(base_url, sheet_name):
     try:
-        # Usamos st.connection de forma directa y simple
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(spreadsheet=spreadsheet_url, worksheet=worksheet_name)
+        # Construimos la URL de exportación directa en formato CSV
+        # Esto salta muchas restricciones de la API y es más rápido
+        export_url = f"{base_url}/gviz/tq?tqx=out:csv&sheet={sheet_name.replace(' ', '%20')}"
         
-        if df is None or df.empty:
+        df = pd.read_csv(export_url)
+        
+        if df.empty:
             return pd.DataFrame()
 
-        # Limpieza estándar
-        df.columns = df.columns.str.strip()
-        col_id = 'Patient' if 'Patient' in df.columns else ('Cast' if 'Cast' in df.columns else df.columns[0])
+        # Limpieza de nombres de columnas (quita espacios y caracteres raros)
+        df.columns = [str(c).strip() for c in df.columns]
         
+        # Identificar columna (buscamos 'Patient' o 'Cast')
+        col_id = None
+        for potential_col in ['Patient', 'Cast']:
+            if potential_col in df.columns:
+                col_id = potential_col
+                break
+        
+        if not col_id:
+            col_id = df.columns[0] # Si no encuentra, usa la primera
+        
+        # Extraer fecha
         def get_date(text):
             match = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
             return match.group(1) if match else None
@@ -48,7 +59,7 @@ def load_data(spreadsheet_url, worksheet_name):
         
         return df
     except Exception as e:
-        st.sidebar.error(f"Error in {worksheet_name}: {e}")
+        st.sidebar.error(f"System could not find sheet: '{sheet_name}'")
         return pd.DataFrame()
 
 # --- INTERFACE ---
@@ -60,7 +71,7 @@ else:
     tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
     with tab1:
-        # IMPORTANTE: Asegúrate de que en Google Sheets la pestaña se llame "Patients"
+        # Buscamos "Patients"
         df_p = load_data(url, "Patients")
         if not df_p.empty:
             appr = len(df_p[df_p['Quality Check (um)'] == 'APPROVED'])
@@ -74,10 +85,10 @@ else:
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_p)
         else:
-            st.error("Could not read 'Patients' sheet. Verify the name on the Google Sheet tab.")
+            st.error("Check if the tab is named 'Patients' (no spaces) and the Sheet is PUBLIC.")
 
     with tab2:
-        # IMPORTANTE: Asegúrate de que en Google Sheets la pestaña se llame "Casts"
+        # Buscamos "Casts"
         df_c = load_data(url, "Casts")
         if not df_c.empty:
             appr_c = len(df_c[df_c['Quality Check (um)'] == 'APPROVED'])
@@ -91,4 +102,4 @@ else:
             st.plotly_chart(fig_c, use_container_width=True)
             st.dataframe(df_c)
         else:
-            st.error("Could not read 'Casts' sheet. Verify the name on the Google Sheet tab.")
+            st.error("Check if the tab is named 'Casts' (no spaces) and the Sheet is PUBLIC.")
