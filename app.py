@@ -48,7 +48,7 @@ category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
 p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
-# --- CARGA DE DATOS ---
+# --- CARGA Y NORMALIZACIÓN ---
 @st.cache_data(ttl=10)
 def load_data(url, gid):
     try:
@@ -58,102 +58,83 @@ def load_data(url, gid):
         cid = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
         qcol = 'Quality Check (um)'
         
+        # Filtro de seguridad
         df = df[df[cid].notna() & df[qcol].notna()].copy()
         
-        # --- NORMALIZACIÓN DE ESTADOS (Solución al error de escritura) ---
-        def normalize_quality(val):
-            val = str(val).upper().strip()
-            if "PARTIAL" in val: return "PARTIALLY APROVED"
-            if "REP" in val: return "REPROVED" # Captura REPROVED, REPPROVED, REPROBADO
-            if "APP" in val: return "APPROVED"
-            return val
+        # Normalización para errores de dedo (REPPROVED, REPROBADO, etc)
+        def normalize(val):
+            v = str(val).upper()
+            if "PARTIAL" in v: return "PARTIALLY APROVED"
+            if "REP" in v: return "REPROVED"
+            if "APP" in v: return "APPROVED"
+            return v
 
-        df[qcol] = df[qcol].apply(normalize_quality)
+        df[qcol] = df[qcol].apply(normalize)
 
-        def process_row(val):
+        def process_id(val):
             val = str(val)
             date_m = re.search(r'(\d{4}_\d{2}_\d{2})', val)
-            clean_val = val.replace(date_m.group(1) if date_m else "", "")
-            num_m = re.search(r'(\d{3,5})', clean_val)
+            num_m = re.search(r'(\d{3,5})', val.replace(date_m.group(1), "") if date_m else val)
             return pd.Series([date_m.group(1) if date_m else None, int(num_m.group(1)) if num_m else 0])
 
-        df[['date_str', 'p_num']] = df[cid].apply(process_row)
+        df[['date_str', 'p_num']] = df[cid].apply(process_id)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
         df = df[df['Date'].notna() & (df['p_num'] > 0)].copy()
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         return df, cid
-    except Exception as e:
-        return pd.DataFrame(), str(e)
+    except:
+        return pd.DataFrame(), None
 
 df_raw, col_id_name = load_data(info["url"], info["sheets"][category])
 
 if not df_raw.empty:
     st.sidebar.divider()
-    filter_mode = st.sidebar.selectbox("🎯 Filtrar por:", ["Rango de IDs", "Rango de Fechas"])
+    f_mode = st.sidebar.selectbox("🎯 Filtrar por:", ["Rango de IDs", "Rango de Fechas"])
     
-    if filter_mode == "Rango de IDs":
+    if f_mode == "Rango de IDs":
         min_v, max_v = int(df_raw['p_num'].min()), int(df_raw['p_num'].max())
         c1, c2 = st.sidebar.columns(2)
-        start = c1.number_input("Desde ID:", value=min_v)
-        end = c2.number_input("Hasta ID:", value=max_v)
+        start, end = c1.number_input("Desde:", value=min_v), c2.number_input("Hasta:", value=max_v)
         df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)].copy()
     else:
-        d_min, d_max = df_raw['Date'].min().date(), df_raw['Date'].max().date()
-        dr = st.sidebar.date_input("Periodo:", [d_min, d_max])
+        dr = st.sidebar.date_input("Periodo:", [df_raw['Date'].min().date(), df_raw['Date'].max().date()])
         if isinstance(dr, (list, tuple)) and len(dr) == 2:
             df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])].copy()
         else:
             df_f = df_raw.copy()
 
-    # --- MÉTRICAS ---
-    total_coll = len(df_f)
+    # --- CÁLCULOS ---
     app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
     par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
     rep_n = len(df_f[df_f['Quality Check (um)'] == 'REPROVED'])
-    
-    ratio = p_par / p_app if p_app > 0 else 0.5
-    acc_n = round(app_n + (par_n * ratio), 1)
+    acc_n = round(app_n + (par_n * (p_par/p_app if p_app > 0 else 0.5)), 1)
     money = (app_n * p_app) + (par_n * p_par)
 
+    # --- UI ---
     st.title(f"📊 Dashboard {client}: {category}")
-    
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Collected", total_coll)
-    m2.metric("Approved ✅", app_n)
-    st.markdown(f"<div style='margin-top:-25px; margin-left: 21%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
-    m3.metric("Partial ⚠️", par_n)
-    m4.metric("Reproved ❌", rep_n)
-    m5.metric("Total Earnings", f"${money:,.2f}")
+    m = st.columns(5)
+    m[0].metric("Total Coll.", len(df_f))
+    m[1].metric("Approved ✅", app_n)
+    st.markdown(f"<div style='margin-top:-25px; margin-left: 21%;'><span style='color:#28a745; font-weight:700'>Total Scans: {acc_n}</span></div>", unsafe_allow_html=True)
+    m[2].metric("Partial ⚠️", par_n)
+    m[3].metric("Reproved ❌", rep_n)
+    m[4].metric("Earnings", f"${money:,.2f}")
 
-    # --- DIAGRAMAS ---
     st.divider()
-    col1, col2 = st.columns([2, 1])
+    c1, c2 = st.columns([2, 1])
     colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
     
-    with col1:
-        fig_bar = px.bar(df_f, x='Week', color='Quality Check (um)', 
-                         title="Evolución Semanal", barmode='group', 
-                         color_discrete_map=colors,
-                         category_orders={"Quality Check (um)": ["APPROVED", "PARTIALLY APROVED", "REPROVED"]})
-        st.plotly_chart(fig_bar, use_container_width=True)
-    with col2:
-        fig_pie = px.pie(df_f, names='Quality Check (um)', hole=0.4, 
-                         title="Distribución de Calidad", color='Quality Check (um)', 
-                         color_discrete_map=colors)
-        st.plotly_chart(fig_pie, use_container_width=True)
+    with c1:
+        st.plotly_chart(px.bar(df_f, x='Week', color='Quality Check (um)', barmode='group', color_discrete_map=colors, category_orders={"Quality Check (um)": ["APPROVED", "PARTIALLY APROVED", "REPROVED"]}), use_container_width=True)
+    with c2:
+        st.plotly_chart(px.pie(df_f, names='Quality Check (um)', hole=0.4, color='Quality Check (um)', color_discrete_map=colors), use_container_width=True)
 
     # --- DESCARGA ---
     st.sidebar.divider()
-    header = f"""Total Patients Collected: {total_coll}
-Patients Accepted: {acc_n}
-Total Reproved: {rep_n}
-Total Earnings: ${money:.2f}
-
-"""
-    csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
-    st.sidebar.download_button("📥 Descargar Resumen", header + csv_body, f"Reporte_{client}_{category}.csv")
-
-    with st.expander("🔍 Ver Tabla de Datos"):
+    csv_h = f"Total Coll: {len(df_f)}\nScans Accepted: {acc_n}\nReproved: {rep_n}\nEarnings: ${money:.2f}\n\n"
+    st.sidebar.download_button("📥 Descargar Reporte", csv_h + df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False), f"Reporte_{client}.csv")
+    
+    with st.expander("🔍 Ver Tabla"):
         st.dataframe(df_f.drop(columns=['date_str', 'p_num', 'Week']), use_container_width=True)
 else:
-    st.warning("No hay datos que coincidan con los filtros seleccionados.")
+    st.warning("Sin datos.")
