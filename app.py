@@ -18,24 +18,37 @@ CLIENT_CONFIG = {
     }
 }
 
-# --- SISTEMA DE ACCESO ---
+# --- SISTEMA DE ACCESO SIMPLIFICADO ---
 if 'auth' not in st.session_state:
     st.session_state['auth'] = None
 
 if st.session_state['auth'] is None:
-    st.title("🔐 Acceso al Sistema")
-    u = st.text_input("Ingrese nombre de Cuenta (Granit/Cruz):").strip()
+    st.title("🔐 Acceso")
+    # Título simplificado a "Nombre"
+    u = st.text_input("Nombre:").strip()
     if u:
         matching = next((k for k in CLIENT_CONFIG.keys() if k.lower() == u.lower()), None)
         if matching:
             st.session_state['auth'] = matching
             st.rerun()
         else:
-            st.error("Cuenta no encontrada.")
+            st.error("Nombre no reconocido.")
     st.stop()
 
 client = st.session_state['auth']
 info = CLIENT_CONFIG[client]
+
+# --- SIDEBAR (CONTROL) ---
+st.sidebar.title(f"💼 {client}")
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    st.session_state['auth'] = None
+    st.rerun()
+
+st.sidebar.divider()
+# Definimos la categoría antes de cargar para evitar errores
+category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
+p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
+p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
 # --- CARGA DE DATOS ---
 @st.cache_data(ttl=60)
@@ -49,7 +62,6 @@ def load_data(url, gid):
         def process_row(val):
             val = str(val)
             date_m = re.search(r'(\d{4}_\d{2}_\d{2})', val)
-            # Extraer número ignorando la fecha encontrada
             clean_val = val.replace(date_m.group(1), "") if date_m else val
             num_m = re.search(r'(\d{3,5})', clean_val)
             return pd.Series([date_m.group(1) if date_m else None, int(num_m.group(1)) if num_m else 0])
@@ -61,18 +73,7 @@ def load_data(url, gid):
         return df, cid
     except: return pd.DataFrame(), None
 
-df_raw, col_id_name = load_data(info["url"], info["sheets"][category if 'category' in locals() else "Patients"])
-
-# --- BARRA LATERAL (CONTROL) ---
-st.sidebar.title(f"💼 {client}")
-if st.sidebar.button("🚪 Cerrar Sesión"):
-    st.session_state['auth'] = None
-    st.rerun()
-
-st.sidebar.divider()
-category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
-p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
-p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
+df_raw, col_id_name = load_data(info["url"], info["sheets"][category])
 
 if not df_raw.empty:
     st.sidebar.divider()
@@ -94,9 +95,7 @@ if not df_raw.empty:
     total_coll = len(df_f)
     app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
     par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
-    rep_n = len(df_f[df_f['Quality Check (um)'] == 'REPROVED'])
     
-    # Patients Accepted (Total Scans)
     ratio = p_par / p_app if p_app > 0 else 0.5
     acc_n = round(app_n + (par_n * ratio), 1)
     money = (app_n * p_app) + (par_n * p_par)
@@ -105,18 +104,17 @@ if not df_raw.empty:
     st.title(f"📊 Dashboard {client}")
     
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Collected", total_coll)
-    
+    m1.metric("Total Patients Collected", total_coll)
     m2.metric("Approved ✅", app_n)
-    st.markdown(f"<div style='margin-top:-25px'><span style='color:#555; font-size:1.1em'>Total Scans: </span><span style='color:#28a745; font-size:1.1em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
+    # Total Scans como texto secundario bajo Approved
+    st.markdown(f"<div style='margin-top:-25px; margin-left: 25.5%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
     
     m3.metric("Partial ⚠️", par_n)
-    m4.metric("Earnings", f"${money:,.2f}")
+    m4.metric("Total Earnings", f"${money:,.2f}")
 
     # --- DIAGRAMAS ---
     st.divider()
     col_chart1, col_chart2 = st.columns([2, 1])
-    
     quality_colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
     
     with col_chart1:
@@ -133,12 +131,4 @@ if not df_raw.empty:
 
     # --- DESCARGA ---
     st.sidebar.divider()
-    resumen_csv = f"Total Collected: {total_coll}\nTotal Scans (Accepted): {acc_n}\nEarnings: ${money}\n\n"
-    resumen_csv += df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
-    st.sidebar.download_button("📥 Descargar Resumen", resumen_csv, f"Reporte_{client}.csv")
-
-    with st.expander("🔍 Ver Tabla de Datos"):
-        st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
-
-else:
-    st.error("No se pudieron cargar los datos. Verifica el enlace de Google Sheets.")
+    res_csv = f"Total Patients Collected:
