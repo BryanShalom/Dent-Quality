@@ -17,7 +17,7 @@ CLIENTS = {
     }
 }
 
-# --- SIDEBAR: CONFIGURACIÓN DE PRECIOS ---
+# --- SIDEBAR: CONFIGURACIÓN ---
 st.sidebar.header("🛠️ Dashboard Control")
 selected_client = st.sidebar.selectbox("1. Select Client", list(CLIENTS.keys()))
 category = st.sidebar.radio("2. Select Category", ["Patients", "Cast"])
@@ -26,11 +26,10 @@ st.sidebar.subheader("💰 Pricing per Status")
 pay_approved = st.sidebar.number_input("Approved ($)", value=0.50, step=0.05)
 pay_partial = st.sidebar.number_input("Partially Approved ($)", value=0.25, step=0.05)
 
-# Colores consistentes para los estados
 quality_colors = {
-    'APPROVED': '#28a745',          # Verde
-    'PARTIALLY APROVED': '#ff8c00', # Naranja
-    'REPROVED': '#dc3545'           # Rojo
+    'APPROVED': '#28a745', 
+    'PARTIALLY APROVED': '#ff8c00', 
+    'REPROVED': '#dc3545'
 }
 
 # 2. FUNCIÓN DE CARGA
@@ -42,7 +41,9 @@ def load_by_gid(base_url, gid):
         if df.empty: return pd.DataFrame()
         
         df.columns = [str(c).strip() for c in df.columns]
+        # Guardamos el nombre original de la columna ID (Patient o Cast)
         col_id = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
+        st.session_state['col_id'] = col_id 
         
         def extract_date(text):
             m = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
@@ -59,28 +60,41 @@ def load_by_gid(base_url, gid):
 
 # 3. LÓGICA PRINCIPAL
 client_info = CLIENTS[selected_client]
-df = load_by_gid(client_info["url"], client_info["sheets"][category])
+df_raw = load_by_gid(client_info["url"], client_info["sheets"][category])
 
-if not df.empty:
+if not df_raw.empty:
+    col_id = st.session_state.get('col_id', df_raw.columns[0])
+    
+    # --- NUEVO: FILTRO POR PACIENTE ---
+    st.sidebar.subheader(f"👤 Filter by {category}")
+    unique_items = sorted(df_raw[col_id].unique())
+    selected_items = st.sidebar.multiselect(f"Search/Select {category}", options=unique_items)
+
+    # --- FILTRO POR FECHA ---
     st.sidebar.subheader("📅 Filter Dates")
-    min_d, max_d = df['Date'].min().date(), df['Date'].max().date()
+    min_d, max_d = df_raw['Date'].min().date(), df_raw['Date'].max().date()
     date_range = st.sidebar.date_input("Date Range", [min_d, max_d])
     
+    # Aplicar filtros
+    df_filtered = df_raw.copy()
+    
+    # Filtrar por fecha
     if isinstance(date_range, list) and len(date_range) == 2:
-        df_filtered = df[(df['Date'].dt.date >= date_range[0]) & (df['Date'].dt.date <= date_range[1])]
-    else:
-        df_filtered = df
+        df_filtered = df_filtered[(df_filtered['Date'].dt.date >= date_range[0]) & (df_filtered['Date'].dt.date <= date_range[1])]
+    
+    # Filtrar por pacientes seleccionados
+    if selected_items:
+        df_filtered = df_filtered[df_filtered[col_id].isin(selected_items)]
 
+    # --- UI ---
     st.title(f"📊 {selected_client} Analysis: {category}")
     
-    # --- CÁLCULO DE MÉTRICAS ---
+    # Métricas
     appr_count = len(df_filtered[df_filtered['Quality Check (um)'] == 'APPROVED'])
     partial_count = len(df_filtered[df_filtered['Quality Check (um)'] == 'PARTIALLY APROVED'])
     reproved_count = len(df_filtered[df_filtered['Quality Check (um)'] == 'REPROVED'])
-    
     total_earnings = (appr_count * pay_approved) + (partial_count * pay_partial)
 
-    # Mostrar Métricas en 4 columnas
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Approved ✅", appr_count)
     m2.metric("Partial ⚠️", partial_count)
@@ -106,4 +120,4 @@ if not df.empty:
     with st.expander("🔍 View Raw Data"):
         st.dataframe(df_filtered.drop(columns=['date_str']), use_container_width=True)
 else:
-    st.warning(f"No data found for {selected_client} - {category}. Check permissions.")
+    st.warning(f"No data found for {selected_client} - {category}.")
