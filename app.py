@@ -18,7 +18,7 @@ CLIENT_CONFIG = {
     }
 }
 
-# --- SISTEMA DE ACCESO ---
+# --- ACCESO ---
 if 'auth' not in st.session_state:
     st.session_state['auth'] = None
 
@@ -37,7 +37,7 @@ if st.session_state['auth'] is None:
 client = st.session_state['auth']
 info = CLIENT_CONFIG[client]
 
-# --- SIDEBAR (CONTROL) ---
+# --- SIDEBAR ---
 st.sidebar.title(f"💼 {client}")
 if st.sidebar.button("🚪 Cerrar Sesión"):
     st.session_state['auth'] = None
@@ -48,16 +48,22 @@ category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
 p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
-# --- CARGA DE DATOS ---
-@st.cache_data(ttl=60)
+# --- CARGA DE DATOS (CORREGIDA PARA EVITAR FILAS FANTASMA) ---
+@st.cache_data(ttl=10) # Reducido a 10 segundos para ver cambios rápido
 def load_data(url, gid):
     try:
-        # Línea corregida: Aseguramos que el f-string esté bien cerrado
         csv_url = f"{url}/export?format=csv&gid={gid}"
         df = pd.read_csv(csv_url)
+        
+        # ELIMINAR FILAS VACÍAS (Google Sheets a veces envía filas extra al final)
+        df = df.dropna(how='all') 
+        
         df.columns = [str(c).strip() for c in df.columns]
         cid = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
         
+        # Limpiar la columna ID de valores nulos
+        df = df[df[cid].notna()]
+
         def process_row(val):
             val = str(val)
             date_m = re.search(r'(\d{4}_\d{2}_\d{2})', val)
@@ -67,11 +73,14 @@ def load_data(url, gid):
 
         df[['date_str', 'p_num']] = df[cid].apply(process_row)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
-        df['Date'] = df['Date'].fillna(pd.Timestamp('2024-01-01'))
+        
+        # Solo mantener filas con fecha válida para evitar conteos erróneos
+        df = df.dropna(subset=['Date'])
+        
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         return df, cid
-    except:
-        return pd.DataFrame(), None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
 df_raw, col_id_name = load_data(info["url"], info["sheets"][category])
 
@@ -82,17 +91,22 @@ if not df_raw.empty:
     if filter_mode == "Rango de IDs":
         min_v, max_v = int(df_raw['p_num'].min()), int(df_raw['p_num'].max())
         c1, c2 = st.sidebar.columns(2)
-        start = c1.number_input("Desde:", value=min_v)
-        end = c2.number_input("Hasta:", value=max_v)
-        df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)]
+        start = c1.number_input("Desde ID:", value=min_v)
+        end = c2.number_input("Hasta ID:", value=max_v)
+        df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)].copy()
     else:
-        dr = st.sidebar.date_input("Periodo:", [df_raw['Date'].min().date(), df_raw['Date'].max().date()])
+        # FILTRO DE FECHA CORREGIDO
+        d_min = df_raw['Date'].min().date()
+        d_max = df_raw['Date'].max().date()
+        dr = st.sidebar.date_input("Seleccione Periodo:", [d_min, d_max])
+        
         if isinstance(dr, list) and len(dr) == 2:
-            df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])]
+            # Convertimos la columna Date a solo fecha para comparar correctamente
+            df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])].copy()
         else:
-            df_f = df_raw
+            df_f = df_raw.copy()
 
-    # --- CÁLCULOS ---
+    # --- MÉTRICAS ---
     total_coll = len(df_f)
     app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
     par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
@@ -101,15 +115,12 @@ if not df_raw.empty:
     acc_n = round(app_n + (par_n * ratio), 1)
     money = (app_n * p_app) + (par_n * p_par)
 
-    # --- UI PRINCIPAL ---
     st.title(f"📊 Dashboard {client}")
     
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Collected", total_coll)
     m2.metric("Approved ✅", app_n)
-    # Total Scans posicionado dinámicamente
     st.markdown(f"<div style='margin-top:-25px; margin-left: 25%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
-    
     m3.metric("Partial ⚠️", par_n)
     m4.metric("Total Earnings", f"${money:,.2f}")
 
@@ -138,16 +149,9 @@ Total Earnings: ${money:.2f}
 
 """
     csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
-    full_csv = res_csv_header + csv_body
-
-    st.sidebar.download_button(
-        label="📥 Descargar Resumen",
-        data=full_csv,
-        file_name=f"Reporte_{client}_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv"
-    )
+    st.sidebar.download_button("📥 Descargar Resumen", res_csv_header + csv_body, f"Reporte_{client}.csv")
 
     with st.expander("🔍 Ver Tabla de Datos"):
         st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
 else:
-    st.error("No se pudieron cargar los datos. Verifique el enlace de Google Sheets.")
+    st.error("No se encontraron datos válidos. Revisa las fechas en tu Google Sheets.")
