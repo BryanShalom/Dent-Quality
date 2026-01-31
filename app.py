@@ -21,33 +21,22 @@ quality_colors = {
     'REPPROVED': '#dc3545'
 }
 
-# 2. DATA LOADING (Direct Export Method - More reliable)
+# 2. DATA LOADING
 @st.cache_data(ttl=60)
 def load_data(base_url, sheet_name):
     try:
-        # Construimos la URL de exportación directa en formato CSV
-        # Esto salta muchas restricciones de la API y es más rápido
+        # Construimos la URL de exportación directa
         export_url = f"{base_url}/gviz/tq?tqx=out:csv&sheet={sheet_name.replace(' ', '%20')}"
-        
         df = pd.read_csv(export_url)
         
         if df.empty:
             return pd.DataFrame()
 
-        # Limpieza de nombres de columnas (quita espacios y caracteres raros)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Identificar columna (buscamos 'Patient' o 'Cast')
-        col_id = None
-        for potential_col in ['Patient', 'Cast']:
-            if potential_col in df.columns:
-                col_id = potential_col
-                break
+        # Identificar columna
+        col_id = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
         
-        if not col_id:
-            col_id = df.columns[0] # Si no encuentra, usa la primera
-        
-        # Extraer fecha
         def get_date(text):
             match = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
             return match.group(1) if match else None
@@ -58,8 +47,7 @@ def load_data(base_url, sheet_name):
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         
         return df
-    except Exception as e:
-        st.sidebar.error(f"System could not find sheet: '{sheet_name}'")
+    except Exception:
         return pd.DataFrame()
 
 # --- INTERFACE ---
@@ -71,7 +59,6 @@ else:
     tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
     with tab1:
-        # Buscamos "Patients"
         df_p = load_data(url, "Patients")
         if not df_p.empty:
             appr = len(df_p[df_p['Quality Check (um)'] == 'APPROVED'])
@@ -82,13 +69,13 @@ else:
             
             fig = px.bar(df_p, x='Week', color='Quality Check (um)', 
                          barmode='group', color_discrete_map=quality_colors)
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(df_p)
+            # AÑADIMOS KEY ÚNICA AQUÍ
+            st.plotly_chart(fig, use_container_width=True, key="chart_patients")
+            st.dataframe(df_p, use_container_width=True, key="table_patients")
         else:
-            st.error("Check if the tab is named 'Patients' (no spaces) and the Sheet is PUBLIC.")
+            st.error("No data found in 'Patients' sheet. Check tab name and sharing settings.")
 
     with tab2:
-        # Buscamos "Casts"
         df_c = load_data(url, "Casts")
         if not df_c.empty:
             appr_c = len(df_c[df_c['Quality Check (um)'] == 'APPROVED'])
@@ -99,7 +86,8 @@ else:
             
             fig_c = px.bar(df_c, x='Week', color='Quality Check (um)', 
                            barmode='group', color_discrete_map=quality_colors)
-            st.plotly_chart(fig_c, use_container_width=True)
-            st.dataframe(df_c)
+            # AÑADIMOS KEY ÚNICA AQUÍ
+            st.plotly_chart(fig_c, use_container_width=True, key="chart_casts")
+            st.dataframe(df_c, use_container_width=True, key="table_casts")
         else:
-            st.error("Check if the tab is named 'Casts' (no spaces) and the Sheet is PUBLIC.")
+            st.error("No data found in 'Casts' sheet. Check tab name and sharing settings.")
