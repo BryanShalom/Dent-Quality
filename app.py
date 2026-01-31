@@ -6,7 +6,7 @@ import re
 
 st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
-# 1. CLIENTS & SECRETS (Cleaning spaces from URLs)
+# 1. CLIENTS & SECRETS
 CLIENTS = {
     "Granit": st.secrets.get("URL_GRANIT", "").strip(),
     "Cruz": st.secrets.get("URL_CRUZ", "").strip()
@@ -22,17 +22,18 @@ quality_colors = {
     'REPPROVED': '#dc3545'
 }
 
-conn = st.connection("gsheets", type=GSheetsConnection)
-
+# 2. DATA LOADING (Simplest Method)
 @st.cache_data(ttl=60)
-def load_data(url, sheet_name):
+def load_data(spreadsheet_url, worksheet_name):
     try:
-        # Cargamos los datos. Al no tener espacios el nombre de la hoja, no habrá error de URL.
-        df = conn.read(spreadsheet=url, worksheet=sheet_name)
+        # Usamos st.connection de forma directa y simple
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(spreadsheet=spreadsheet_url, worksheet=worksheet_name)
         
         if df is None or df.empty:
             return pd.DataFrame()
 
+        # Limpieza estándar
         df.columns = df.columns.str.strip()
         col_id = 'Patient' if 'Patient' in df.columns else ('Cast' if 'Cast' in df.columns else df.columns[0])
         
@@ -47,49 +48,47 @@ def load_data(url, sheet_name):
         
         return df
     except Exception as e:
-        st.error(f"Error loading '{sheet_name}': {e}")
+        st.sidebar.error(f"Error in {worksheet_name}: {e}")
         return pd.DataFrame()
 
-# --- MAIN DASHBOARD ---
-current_url = CLIENTS[selected_client]
+# --- INTERFACE ---
+url = CLIENTS[selected_client]
 
-if not current_url:
-    st.warning("⚠️ No URL found. Check your Streamlit Secrets.")
+if not url:
+    st.warning("⚠️ No URL found in Secrets.")
 else:
     tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
     with tab1:
-        # Ahora buscamos el nombre simplificado "Patients"
-        df_pat = load_data(current_url, "Patients")
-        
-        if not df_pat.empty:
-            appr = len(df_pat[df_pat['Quality Check (um)'] == 'APPROVED'])
+        # IMPORTANTE: Asegúrate de que en Google Sheets la pestaña se llame "Patients"
+        df_p = load_data(url, "Patients")
+        if not df_p.empty:
+            appr = len(df_p[df_p['Quality Check (um)'] == 'APPROVED'])
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total Patients", len(df_pat))
+            c1.metric("Total Patients", len(df_p))
             c2.metric("Approved ✅", appr)
             c3.metric("Estimated Payment", f"${appr * pay_per_scan:,.2f}")
             
-            fig = px.bar(df_pat, x='Week', color='Quality Check (um)', 
+            fig = px.bar(df_p, x='Week', color='Quality Check (um)', 
                          barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(df_pat)
+            st.dataframe(df_p)
         else:
-            st.info("No data in 'Patients' tab. Ensure the tab name is exactly 'Patients' in Google Sheets.")
+            st.error("Could not read 'Patients' sheet. Verify the name on the Google Sheet tab.")
 
     with tab2:
-        # Ahora buscamos el nombre simplificado "Casts"
-        df_cast = load_data(current_url, "Casts")
-        
-        if not df_cast.empty:
-            appr_c = len(df_cast[df_cast['Quality Check (um)'] == 'APPROVED'])
+        # IMPORTANTE: Asegúrate de que en Google Sheets la pestaña se llame "Casts"
+        df_c = load_data(url, "Casts")
+        if not df_c.empty:
+            appr_c = len(df_c[df_c['Quality Check (um)'] == 'APPROVED'])
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total Casts", len(df_cast))
+            c1.metric("Total Casts", len(df_c))
             c2.metric("Approved ✅", appr_c)
             c3.metric("Estimated Payment", f"${appr_c * pay_per_scan:,.2f}")
             
-            fig_c = px.bar(df_cast, x='Week', color='Quality Check (um)', 
+            fig_c = px.bar(df_c, x='Week', color='Quality Check (um)', 
                            barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig_c, use_container_width=True)
-            st.dataframe(df_cast)
+            st.dataframe(df_c)
         else:
-            st.info("No data in 'Casts' tab. Ensure the tab name is exactly 'Casts' in Google Sheets.")
+            st.error("Could not read 'Casts' sheet. Verify the name on the Google Sheet tab.")
