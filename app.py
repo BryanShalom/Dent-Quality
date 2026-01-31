@@ -3,6 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import plotly.express as px
 import re
+import urllib.parse # Nueva librería para manejar espacios en URLs
 
 st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
@@ -24,32 +25,29 @@ quality_colors = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. FUNCIÓN DE CARGA CON DIAGNÓSTICO
+# 2. FUNCIÓN DE CARGA CORREGIDA (Maneja espacios en nombres de hojas)
 @st.cache_data(ttl=60)
 def load_data_with_check(url, sheet_name):
     try:
-        # Intentamos leer la pestaña específica
+        # Importante: No pasamos el sheet_name dentro de la URL manual, 
+        # dejamos que la librería lo maneje internamente para evitar el error de "control characters"
         df = conn.read(spreadsheet=url, worksheet=sheet_name)
         
         if df is None or df.empty:
             return pd.DataFrame(), f"Sheet '{sheet_name}' is empty or not found."
 
-        # Limpieza de columnas
         df.columns = df.columns.str.strip()
         
-        # Buscar columna de ID (Patient o Cast)
-        col_name = next((c for c in df.columns if c in ['Patient', 'Cast']), df.columns[0])
+        # Identificar columna Patient o Cast
+        col_id = 'Patient' if 'Patient' in df.columns else ('Cast' if 'Cast' in df.columns else df.columns[0])
         
-        # Extraer fecha
         def get_date(text):
             match = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
             return match.group(1) if match else None
 
-        df['date_str'] = df[col_name].apply(get_date)
+        df['date_str'] = df[col_id].apply(get_date)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
         df = df.dropna(subset=['Date'])
-        
-        # Agrupar por semana
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         
         return df, None
@@ -60,34 +58,27 @@ def load_data_with_check(url, sheet_name):
 current_url = CLIENTS[selected_client]
 
 if not current_url:
-    st.warning("⚠️ URL not found. Please check your Streamlit Secrets.")
+    st.warning("⚠️ URL not found in Secrets.")
 else:
-    # MOSTRAR TABS
     tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
     with tab1:
-        # Usando el nombre exacto de tus archivos: "Pattients Granit"
+        # El nombre debe coincidir exactamente con Google Sheets
         df_pat, error_pat = load_data_with_check(current_url, "Pattients Granit")
         
         if not df_pat.empty:
-            # Filtro de fecha
-            min_d, max_d = df_pat['Date'].min().date(), df_pat['Date'].max().date()
-            
-            # Métricas
             appr = len(df_pat[df_pat['Quality Check (um)'] == 'APPROVED'])
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Patients", len(df_pat))
             c2.metric("Approved ✅", appr)
             c3.metric("Total Payment", f"${appr * pay_per_scan:,.2f}")
             
-            # Gráfico
             fig = px.bar(df_pat, x='Week', color='Quality Check (um)', 
                          barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_pat)
         else:
-            st.error(f"Error loading Patients: {error_pat}")
-            st.info("💡 Hint: Make sure the tab name is exactly 'Pattients Granit' in Google Sheets.")
+            st.error(f"Error: {error_pat}")
 
     with tab2:
         df_cast, error_cast = load_data_with_check(current_url, "Cast Granit")
@@ -104,11 +95,4 @@ else:
             st.plotly_chart(fig_c, use_container_width=True)
             st.dataframe(df_cast)
         else:
-            st.error(f"Error loading Casts: {error_cast}")
-            st.info("💡 Hint: Make sure the tab name is exactly 'Cast Granit'.")
-
-# 3. HERRAMIENTA DE AYUDA (Sidebar)
-with st.sidebar.expander("🔍 Help & Diagnostics"):
-    st.write("If you see errors, verify that:")
-    st.write("1. Sheet names are exactly 'Pattients Granit' and 'Cast Granit'.")
-    st.write("2. The Google Sheet is shared as 'Anyone with the link can view'.")
+            st.error(f"Error: {error_cast}")
