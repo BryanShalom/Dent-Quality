@@ -59,6 +59,16 @@ def load_data(url, gid):
         qcol = 'Quality Check (um)'
         
         df = df[df[cid].notna() & df[qcol].notna()].copy()
+        
+        # --- NORMALIZACIÓN DE ESTADOS (Solución al error de escritura) ---
+        def normalize_quality(val):
+            val = str(val).upper().strip()
+            if "PARTIAL" in val: return "PARTIALLY APROVED"
+            if "REP" in val: return "REPROVED" # Captura REPROVED, REPPROVED, REPROBADO
+            if "APP" in val: return "APPROVED"
+            return val
+
+        df[qcol] = df[qcol].apply(normalize_quality)
 
         def process_row(val):
             val = str(val)
@@ -99,7 +109,7 @@ if not df_raw.empty:
     total_coll = len(df_f)
     app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
     par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
-    rep_n = len(df_f[df_f['Quality Check (um)'] == 'REPROVED']) # <--- Nuevo Conteo
+    rep_n = len(df_f[df_f['Quality Check (um)'] == 'REPROVED'])
     
     ratio = p_par / p_app if p_app > 0 else 0.5
     acc_n = round(app_n + (par_n * ratio), 1)
@@ -107,33 +117,28 @@ if not df_raw.empty:
 
     st.title(f"📊 Dashboard {client}: {category}")
     
-    # Se ajusta a 5 columnas para incluir Reproved
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total Collected", total_coll)
     m2.metric("Approved ✅", app_n)
     st.markdown(f"<div style='margin-top:-25px; margin-left: 21%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
     m3.metric("Partial ⚠️", par_n)
-    m4.metric("Reproved ❌", rep_n) # <--- Métrica Visual
+    m4.metric("Reproved ❌", rep_n)
     m5.metric("Total Earnings", f"${money:,.2f}")
 
     # --- DIAGRAMAS ---
     st.divider()
     col1, col2 = st.columns([2, 1])
-    # Mapa de colores estricto
-    colors = {
-        'APPROVED': '#28a745',          # Verde
-        'PARTIALLY APROVED': '#ff8c00', # Naranja
-        'REPROVED': '#dc3545'           # Rojo
-    }
+    colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
     
     with col1:
         fig_bar = px.bar(df_f, x='Week', color='Quality Check (um)', 
                          title="Evolución Semanal", barmode='group', 
-                         color_discrete_map=colors)
+                         color_discrete_map=colors,
+                         category_orders={"Quality Check (um)": ["APPROVED", "PARTIALLY APROVED", "REPROVED"]})
         st.plotly_chart(fig_bar, use_container_width=True)
     with col2:
         fig_pie = px.pie(df_f, names='Quality Check (um)', hole=0.4, 
-                         title="Calidad Total", color='Quality Check (um)', 
+                         title="Distribución de Calidad", color='Quality Check (um)', 
                          color_discrete_map=colors)
         st.plotly_chart(fig_pie, use_container_width=True)
 
