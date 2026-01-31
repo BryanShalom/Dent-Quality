@@ -3,14 +3,13 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import plotly.express as px
 import re
-from urllib.parse import quote # Para limpiar los espacios en los nombres
 
 st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
-# 1. CLIENTS & SECRETS
+# 1. CLIENTS & SECRETS (Cleaning spaces from URLs)
 CLIENTS = {
-    "Granit": st.secrets.get("URL_GRANIT", ""),
-    "Cruz": st.secrets.get("URL_CRUZ", "")
+    "Granit": st.secrets.get("URL_GRANIT", "").strip(),
+    "Cruz": st.secrets.get("URL_CRUZ", "").strip()
 }
 
 st.sidebar.header("Settings")
@@ -25,18 +24,14 @@ quality_colors = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. FUNCIÓN DE CARGA ROBUSTA
 @st.cache_data(ttl=60)
-def load_data_safe(url, sheet_name):
+def load_data(url, sheet_name):
     try:
-        # Codificamos el nombre de la hoja (Espacios -> %20)
-        safe_sheet_name = quote(sheet_name)
-        
-        # Leemos usando el nombre seguro
+        # Cargamos los datos. Al no tener espacios el nombre de la hoja, no habrá error de URL.
         df = conn.read(spreadsheet=url, worksheet=sheet_name)
         
         if df is None or df.empty:
-            return pd.DataFrame(), f"Sheet '{sheet_name}' is empty."
+            return pd.DataFrame()
 
         df.columns = df.columns.str.strip()
         col_id = 'Patient' if 'Patient' in df.columns else ('Cast' if 'Cast' in df.columns else df.columns[0])
@@ -50,21 +45,22 @@ def load_data_safe(url, sheet_name):
         df = df.dropna(subset=['Date'])
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         
-        return df, None
+        return df
     except Exception as e:
-        return pd.DataFrame(), str(e)
+        st.error(f"Error loading '{sheet_name}': {e}")
+        return pd.DataFrame()
 
-# --- DASHBOARD ---
+# --- MAIN DASHBOARD ---
 current_url = CLIENTS[selected_client]
 
 if not current_url:
-    st.warning("⚠️ No URL found in Secrets.")
+    st.warning("⚠️ No URL found. Check your Streamlit Secrets.")
 else:
     tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
     with tab1:
-        # El nombre debe ser EXACTO al de la pestaña de abajo en tu Excel
-        df_pat, err_pat = load_data_safe(current_url, "Pattients Granit")
+        # Ahora buscamos el nombre simplificado "Patients"
+        df_pat = load_data(current_url, "Patients")
         
         if not df_pat.empty:
             appr = len(df_pat[df_pat['Quality Check (um)'] == 'APPROVED'])
@@ -78,10 +74,11 @@ else:
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_pat)
         else:
-            st.error(f"Error: {err_pat}")
+            st.info("No data in 'Patients' tab. Ensure the tab name is exactly 'Patients' in Google Sheets.")
 
     with tab2:
-        df_cast, err_cast = load_data_safe(current_url, "Cast Granit")
+        # Ahora buscamos el nombre simplificado "Casts"
+        df_cast = load_data(current_url, "Casts")
         
         if not df_cast.empty:
             appr_c = len(df_cast[df_cast['Quality Check (um)'] == 'APPROVED'])
@@ -95,4 +92,4 @@ else:
             st.plotly_chart(fig_c, use_container_width=True)
             st.dataframe(df_cast)
         else:
-            st.error(f"Error: {err_cast}")
+            st.info("No data in 'Casts' tab. Ensure the tab name is exactly 'Casts' in Google Sheets.")
