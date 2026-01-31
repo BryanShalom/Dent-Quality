@@ -24,7 +24,7 @@ if 'auth_client' not in st.session_state:
 if st.session_state['auth_client'] is None:
     st.title("🔐 Acceso al Dashboard")
     # Usamos text_input normal, no tipo password para que sea más amigable
-    user_input = st.text_input("Escriba el nombre de la cuenta (Granit o Cruz):").strip()
+    user_input = st.text_input("Nombre:").strip()
     
     if user_input:
         # Validación sin importar mayúsculas/minúsculas
@@ -119,3 +119,4 @@ if not df_raw.empty:
         c1, c2 = st.columns([2, 1])
         with c1: st.plotly_chart(px.bar(df_filtered, x='Week', color='Quality Check (um)', barmode='group', color_discrete_map=quality_colors), use_container_width=True)
         with c2: st.plotly_chart(px.pie(df_filtered, names='Quality Check (um)', color='Quality Check (um)', color_discrete_map=quality_colors, hole=0.4), use_container_width=True)
+
