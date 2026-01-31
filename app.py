@@ -86,3 +86,68 @@ if not df_raw.empty:
         end = c2.number_input("Hasta:", value=max_v)
         df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)]
     else:
+        dr = st.sidebar.date_input("Periodo:", [df_raw['Date'].min().date(), df_raw['Date'].max().date()])
+        if isinstance(dr, list) and len(dr) == 2:
+            df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])]
+        else:
+            df_f = df_raw
+
+    # --- CÁLCULOS ---
+    total_coll = len(df_f)
+    app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
+    par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
+    
+    ratio = p_par / p_app if p_app > 0 else 0.5
+    acc_n = round(app_n + (par_n * ratio), 1)
+    money = (app_n * p_app) + (par_n * p_par)
+
+    # --- UI PRINCIPAL ---
+    st.title(f"📊 Dashboard {client}")
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Collected", total_coll)
+    m2.metric("Approved ✅", app_n)
+    # Total Scans posicionado dinámicamente
+    st.markdown(f"<div style='margin-top:-25px; margin-left: 25%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
+    
+    m3.metric("Partial ⚠️", par_n)
+    m4.metric("Total Earnings", f"${money:,.2f}")
+
+    # --- DIAGRAMAS ---
+    st.divider()
+    col_chart1, col_chart2 = st.columns([2, 1])
+    quality_colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
+    
+    with col_chart1:
+        fig_bar = px.bar(df_f, x='Week', color='Quality Check (um)', 
+                         title="Evolución Semanal", barmode='group',
+                         color_discrete_map=quality_colors)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with col_chart2:
+        fig_pie = px.pie(df_f, names='Quality Check (um)', hole=0.4,
+                         title="Distribución de Calidad",
+                         color='Quality Check (um)', color_discrete_map=quality_colors)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # --- DESCARGA ---
+    st.sidebar.divider()
+    res_csv_header = f"""Total Patients Collected: {total_coll}
+Patients Accepted: {acc_n}
+Total Earnings: ${money:.2f}
+
+"""
+    csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
+    full_csv = res_csv_header + csv_body
+
+    st.sidebar.download_button(
+        label="📥 Descargar Resumen",
+        data=full_csv,
+        file_name=f"Reporte_{client}_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv"
+    )
+
+    with st.expander("🔍 Ver Tabla de Datos"):
+        st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
+else:
+    st.error("No se pudieron cargar los datos. Verifique el enlace de Google Sheets.")
