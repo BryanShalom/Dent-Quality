@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import re
+from datetime import datetime
 
-st.set_page_config(page_title="Quality Dashboard", layout="wide")
+st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
 # 1. CONFIGURACIÓN
 CLIENT_CONFIG = {
@@ -16,117 +18,127 @@ CLIENT_CONFIG = {
     }
 }
 
-# --- ACCESO ---
+# --- SISTEMA DE ACCESO ---
 if 'auth' not in st.session_state:
     st.session_state['auth'] = None
 
 if st.session_state['auth'] is None:
-    st.title("🔐 Acceso")
-    u = st.text_input("Cuenta (Granit/Cruz):").strip()
+    st.title("🔐 Acceso al Sistema")
+    u = st.text_input("Ingrese nombre de Cuenta (Granit/Cruz):").strip()
     if u:
         matching = next((k for k in CLIENT_CONFIG.keys() if k.lower() == u.lower()), None)
         if matching:
             st.session_state['auth'] = matching
             st.rerun()
         else:
-            st.error("Nombre de cuenta no reconocido.")
+            st.error("Cuenta no encontrada.")
     st.stop()
 
 client = st.session_state['auth']
 info = CLIENT_CONFIG[client]
 
-# --- CARGA DE DATOS CORREGIDA ---
+# --- CARGA DE DATOS ---
 @st.cache_data(ttl=60)
 def load_data(url, gid):
     try:
         csv_url = f"{url}/export?format=csv&gid={gid}"
         df = pd.read_csv(csv_url)
-        if df.empty:
-            return pd.DataFrame(), None
-        
-        # Limpiar nombres de columnas
         df.columns = [str(c).strip() for c in df.columns]
-        
-        # Identificar columna principal
         cid = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
         
-        def extract_info(val):
+        def process_row(val):
             val = str(val)
-            # Buscar fecha: YYYY_MM_DD
-            date_match = re.search(r'(\d{4}_\d{2}_\d{2})', val)
-            # Buscar número: busca 3 a 5 dígitos
-            num_match = re.search(r'(\d{3,5})', val.replace(date_match.group(1) if date_match else "", ""))
-            
-            d_str = date_match.group(1) if date_match else None
-            n_val = int(num_match.group(1)) if num_match else 0
-            return pd.Series([d_str, n_val])
+            date_m = re.search(r'(\d{4}_\d{2}_\d{2})', val)
+            # Extraer número ignorando la fecha encontrada
+            clean_val = val.replace(date_m.group(1), "") if date_m else val
+            num_m = re.search(r'(\d{3,5})', clean_val)
+            return pd.Series([date_m.group(1) if date_m else None, int(num_m.group(1)) if num_m else 0])
 
-        df[['date_str', 'p_num']] = df[cid].apply(extract_info)
+        df[['date_str', 'p_num']] = df[cid].apply(process_row)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
-        
-        # Si la fecha falló, usamos una fecha ficticia para no borrar la fila
         df['Date'] = df['Date'].fillna(pd.Timestamp('2024-01-01'))
-        df['p_num'] = df['p_num'].fillna(0).astype(int)
-        
+        df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         return df, cid
-    except Exception as e:
-        st.error(f"Error cargando datos: {e}")
-        return pd.DataFrame(), None
+    except: return pd.DataFrame(), None
 
-# --- SIDEBAR Y FILTROS ---
+df_raw, col_id_name = load_data(info["url"], info["sheets"][category if 'category' in locals() else "Patients"])
+
+# --- BARRA LATERAL (CONTROL) ---
 st.sidebar.title(f"💼 {client}")
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    st.session_state['auth'] = None
+    st.rerun()
+
+st.sidebar.divider()
 category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
 p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
-df_raw, col_id_name = load_data(info["url"], info["sheets"][category])
-
 if not df_raw.empty:
     st.sidebar.divider()
-    mode = st.sidebar.selectbox("🎯 Filtrar por:", ["Rango de IDs", "Rango de Fechas"])
+    filter_mode = st.sidebar.selectbox("🎯 Filtrar por:", ["Rango de IDs", "Rango de Fechas"])
     
-    if mode == "Rango de IDs":
+    if filter_mode == "Rango de IDs":
         min_v, max_v = int(df_raw['p_num'].min()), int(df_raw['p_num'].max())
         c1, c2 = st.sidebar.columns(2)
         start = c1.number_input("Desde:", value=min_v)
         end = c2.number_input("Hasta:", value=max_v)
         df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)]
     else:
-        # Filtro de fecha simplificado para evitar errores de zona horaria
-        d_min, d_max = df_raw['Date'].min().date(), df_raw['Date'].max().date()
-        dr = st.sidebar.date_input("Periodo:", [d_min, d_max])
+        dr = st.sidebar.date_input("Periodo:", [df_raw['Date'].min().date(), df_raw['Date'].max().date()])
         if isinstance(dr, list) and len(dr) == 2:
             df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])]
-        else:
-            df_f = df_raw
+        else: df_f = df_raw
 
-    # --- MÉTRICAS ---
-    st.title(f"📊 Resumen: {client}")
-    
+    # --- CÁLCULOS ---
     total_coll = len(df_f)
     app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
     par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
+    rep_n = len(df_f[df_f['Quality Check (um)'] == 'REPROVED'])
     
+    # Patients Accepted (Total Scans)
     ratio = p_par / p_app if p_app > 0 else 0.5
     acc_n = round(app_n + (par_n * ratio), 1)
     money = (app_n * p_app) + (par_n * p_par)
 
-    c_a, c_b, c_c = st.columns(3)
-    c_a.metric("Total Patients Collected", total_coll)
-    c_b.metric("Patients Accepted", acc_n)
-    c_c.metric("Total Earnings", f"${money:,.2f}")
-
-    # --- BOTÓN DESCARGA ---
-    csv_text = f"Total Patients Collected: {total_coll}\nPatients Accepted: {acc_n}\nEarnings: ${money}\n\n"
-    csv_text += df_f[[col_id_name, 'Quality Check (um)']].to_csv(index=False)
+    # --- UI PRINCIPAL ---
+    st.title(f"📊 Dashboard {client}")
     
-    st.sidebar.download_button("📥 Descargar Resumen", csv_text, f"Reporte_{client}.csv")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Collected", total_coll)
+    
+    m2.metric("Approved ✅", app_n)
+    st.markdown(f"<div style='margin-top:-25px'><span style='color:#555; font-size:1.1em'>Total Scans: </span><span style='color:#28a745; font-size:1.1em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
+    
+    m3.metric("Partial ⚠️", par_n)
+    m4.metric("Earnings", f"${money:,.2f}")
 
+    # --- DIAGRAMAS ---
     st.divider()
-    st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
-else:
-    st.warning("No se encontraron datos en la hoja de cálculo. Revisa el link de Google Sheets.")
+    col_chart1, col_chart2 = st.columns([2, 1])
+    
+    quality_colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
+    
+    with col_chart1:
+        fig_bar = px.bar(df_f, x='Week', color='Quality Check (um)', 
+                         title="Evolución Semanal", barmode='group',
+                         color_discrete_map=quality_colors)
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-if st.sidebar.button("Logout"):
-    st.session_state['auth'] = None
-    st.rerun()
+    with col_chart2:
+        fig_pie = px.pie(df_f, names='Quality Check (um)', hole=0.4,
+                         title="Distribución de Calidad",
+                         color='Quality Check (um)', color_discrete_map=quality_colors)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # --- DESCARGA ---
+    st.sidebar.divider()
+    resumen_csv = f"Total Collected: {total_coll}\nTotal Scans (Accepted): {acc_n}\nEarnings: ${money}\n\n"
+    resumen_csv += df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
+    st.sidebar.download_button("📥 Descargar Resumen", resumen_csv, f"Reporte_{client}.csv")
+
+    with st.expander("🔍 Ver Tabla de Datos"):
+        st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
+
+else:
+    st.error("No se pudieron cargar los datos. Verifica el enlace de Google Sheets.")
