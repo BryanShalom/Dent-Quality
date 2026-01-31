@@ -19,7 +19,10 @@ quality_colors = {
 
 # 3. SIDEBAR CONTROLS
 st.sidebar.header("Settings")
-CLIENTS = {
+CLIENTES = {
+    "Granit": "https://docs.google.com/spreadsheets/d/1nTEL5w5mEMXeyolUC8friEmRCix03aQ8NxYV8R63pLE/edit?gid=0#gid=0",
+    "Cruz": "https://docs.google.com/spreadsheets/d/1F83LKwGeHxmSqvwqulmJLxx5VxQXYs5_mobIHEAKREQ/edit?gid=0#gid=0",
+    # "Nuevo Cliente": "URL_AQUI"
     "Granit": st.secrets.get("URL_GRANIT", ""),
     "Cruz": st.secrets.get("URL_CRUZ", "")
 }
@@ -126,3 +129,4 @@ try:
 except Exception as e:
     st.error(f"Configuration Error: {e}")
     st.info("Please check if your Google Sheet URLs are correctly set in Streamlit Secrets.")
+
