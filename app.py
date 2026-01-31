@@ -4,9 +4,9 @@ import plotly.express as px
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
+st.set_page_config(page_title="Quality Dashboard", layout="wide")
 
-# 1. CONFIGURACIÓN DE CLIENTES
+# 1. CONFIGURACIÓN
 CLIENT_CONFIG = {
     "Granit": {
         "url": "https://docs.google.com/spreadsheets/d/1nTEL5w5mEMXeyolUC8friEmRCix03aQ8NxYV8R63pLE",
@@ -48,21 +48,22 @@ category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
 p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
-# --- CARGA DE DATOS (CORREGIDA PARA EVITAR FILAS FANTASMA) ---
-@st.cache_data(ttl=10) # Reducido a 10 segundos para ver cambios rápido
+# --- CARGA DE DATOS (LIMPIEZA PROFUNDA) ---
+@st.cache_data(ttl=10)
 def load_data(url, gid):
     try:
         csv_url = f"{url}/export?format=csv&gid={gid}"
         df = pd.read_csv(csv_url)
         
-        # ELIMINAR FILAS VACÍAS (Google Sheets a veces envía filas extra al final)
-        df = df.dropna(how='all') 
-        
+        # 1. Eliminar columnas y filas completamente vacías
+        df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
         df.columns = [str(c).strip() for c in df.columns]
+        
+        # 2. Identificar columna de ID
         cid = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
         
-        # Limpiar la columna ID de valores nulos
-        df = df[df[cid].notna()]
+        # 3. Solo mantener filas donde el ID no sea nulo
+        df = df[df[cid].notna()].copy()
 
         def process_row(val):
             val = str(val)
@@ -74,7 +75,7 @@ def load_data(url, gid):
         df[['date_str', 'p_num']] = df[cid].apply(process_row)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
         
-        # Solo mantener filas con fecha válida para evitar conteos erróneos
+        # 4. Eliminar filas que no tengan una fecha válida (filas basura)
         df = df.dropna(subset=['Date'])
         
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
@@ -88,6 +89,7 @@ if not df_raw.empty:
     st.sidebar.divider()
     filter_mode = st.sidebar.selectbox("🎯 Filtrar por:", ["Rango de IDs", "Rango de Fechas"])
     
+    # --- LÓGICA DE FILTRADO ---
     if filter_mode == "Rango de IDs":
         min_v, max_v = int(df_raw['p_num'].min()), int(df_raw['p_num'].max())
         c1, c2 = st.sidebar.columns(2)
@@ -95,13 +97,12 @@ if not df_raw.empty:
         end = c2.number_input("Hasta ID:", value=max_v)
         df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)].copy()
     else:
-        # FILTRO DE FECHA CORREGIDO
         d_min = df_raw['Date'].min().date()
         d_max = df_raw['Date'].max().date()
-        dr = st.sidebar.date_input("Seleccione Periodo:", [d_min, d_max])
+        dr = st.sidebar.date_input("Periodo:", [d_min, d_max])
         
-        if isinstance(dr, list) and len(dr) == 2:
-            # Convertimos la columna Date a solo fecha para comparar correctamente
+        if isinstance(dr, (list, tuple)) and len(dr) == 2:
+            # Aseguramos que el filtro de fecha sea estricto
             df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])].copy()
         else:
             df_f = df_raw.copy()
@@ -126,32 +127,25 @@ if not df_raw.empty:
 
     # --- DIAGRAMAS ---
     st.divider()
-    col_chart1, col_chart2 = st.columns([2, 1])
-    quality_colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
+    col1, col2 = st.columns([2, 1])
+    colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
     
-    with col_chart1:
-        fig_bar = px.bar(df_f, x='Week', color='Quality Check (um)', 
-                         title="Evolución Semanal", barmode='group',
-                         color_discrete_map=quality_colors)
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    with col_chart2:
-        fig_pie = px.pie(df_f, names='Quality Check (um)', hole=0.4,
-                         title="Distribución de Calidad",
-                         color='Quality Check (um)', color_discrete_map=quality_colors)
-        st.plotly_chart(fig_pie, use_container_width=True)
+    with col1:
+        st.plotly_chart(px.bar(df_f, x='Week', color='Quality Check (um)', title="Evolución Semanal", barmode='group', color_discrete_map=colors), use_container_width=True)
+    with col2:
+        st.plotly_chart(px.pie(df_f, names='Quality Check (um)', hole=0.4, title="Calidad", color='Quality Check (um)', color_discrete_map=colors), use_container_width=True)
 
     # --- DESCARGA ---
     st.sidebar.divider()
-    res_csv_header = f"""Total Patients Collected: {total_coll}
+    header = f"""Total Patients Collected: {total_coll}
 Patients Accepted: {acc_n}
 Total Earnings: ${money:.2f}
 
 """
     csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
-    st.sidebar.download_button("📥 Descargar Resumen", res_csv_header + csv_body, f"Reporte_{client}.csv")
+    st.sidebar.download_button("📥 Descargar Resumen", header + csv_body, f"Reporte_{client}.csv")
 
     with st.expander("🔍 Ver Tabla de Datos"):
         st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
 else:
-    st.error("No se encontraron datos válidos. Revisa las fechas en tu Google Sheets.")
+    st.warning("Selecciona un rango de fechas válido o verifica tu hoja de Google Sheets.")
