@@ -48,35 +48,34 @@ category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
 p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
-# --- CARGA DE DATOS (LIMPIEZA PROFUNDA) ---
+# --- CARGA DE DATOS (FILTRADO ESTRICTO PARA CAST) ---
 @st.cache_data(ttl=10)
 def load_data(url, gid):
     try:
         csv_url = f"{url}/export?format=csv&gid={gid}"
         df = pd.read_csv(csv_url)
         
-        # 1. Eliminar columnas y filas completamente vacías
-        df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+        # Limpiar nombres de columnas
         df.columns = [str(c).strip() for c in df.columns]
-        
-        # 2. Identificar columna de ID
         cid = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
+        qcol = 'Quality Check (um)'
         
-        # 3. Solo mantener filas donde el ID no sea nulo
-        df = df[df[cid].notna()].copy()
+        # FILTRO CRÍTICO: Eliminar filas donde el ID o la Calidad estén vacíos
+        # Esto elimina las "filas fantasma" al final de la hoja de Cast
+        df = df[df[cid].notna() & df[qcol].notna()].copy()
 
         def process_row(val):
             val = str(val)
             date_m = re.search(r'(\d{4}_\d{2}_\d{2})', val)
-            clean_val = val.replace(date_m.group(1), "") if date_m else val
+            clean_val = val.replace(date_m.group(1) if date_m else "", "")
             num_m = re.search(r'(\d{3,5})', clean_val)
             return pd.Series([date_m.group(1) if date_m else None, int(num_m.group(1)) if num_m else 0])
 
         df[['date_str', 'p_num']] = df[cid].apply(process_row)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
         
-        # 4. Eliminar filas que no tengan una fecha válida (filas basura)
-        df = df.dropna(subset=['Date'])
+        # Solo mantener si tiene fecha válida y p_num > 0
+        df = df[df['Date'].notna() & (df['p_num'] > 0)].copy()
         
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         return df, cid
@@ -89,7 +88,6 @@ if not df_raw.empty:
     st.sidebar.divider()
     filter_mode = st.sidebar.selectbox("🎯 Filtrar por:", ["Rango de IDs", "Rango de Fechas"])
     
-    # --- LÓGICA DE FILTRADO ---
     if filter_mode == "Rango de IDs":
         min_v, max_v = int(df_raw['p_num'].min()), int(df_raw['p_num'].max())
         c1, c2 = st.sidebar.columns(2)
@@ -97,12 +95,9 @@ if not df_raw.empty:
         end = c2.number_input("Hasta ID:", value=max_v)
         df_f = df_raw[(df_raw['p_num'] >= start) & (df_raw['p_num'] <= end)].copy()
     else:
-        d_min = df_raw['Date'].min().date()
-        d_max = df_raw['Date'].max().date()
+        d_min, d_max = df_raw['Date'].min().date(), df_raw['Date'].max().date()
         dr = st.sidebar.date_input("Periodo:", [d_min, d_max])
-        
         if isinstance(dr, (list, tuple)) and len(dr) == 2:
-            # Aseguramos que el filtro de fecha sea estricto
             df_f = df_raw[(df_raw['Date'].dt.date >= dr[0]) & (df_raw['Date'].dt.date <= dr[1])].copy()
         else:
             df_f = df_raw.copy()
@@ -116,7 +111,7 @@ if not df_raw.empty:
     acc_n = round(app_n + (par_n * ratio), 1)
     money = (app_n * p_app) + (par_n * p_par)
 
-    st.title(f"📊 Dashboard {client}")
+    st.title(f"📊 Dashboard {client}: {category}")
     
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Collected", total_coll)
@@ -143,9 +138,9 @@ Total Earnings: ${money:.2f}
 
 """
     csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
-    st.sidebar.download_button("📥 Descargar Resumen", header + csv_body, f"Reporte_{client}.csv")
+    st.sidebar.download_button("📥 Descargar Resumen", header + csv_body, f"Reporte_{client}_{category}.csv")
 
     with st.expander("🔍 Ver Tabla de Datos"):
-        st.dataframe(df_f.drop(columns=['date_str', 'p_num']), use_container_width=True)
+        st.dataframe(df_f.drop(columns=['date_str', 'p_num', 'Week']), use_container_width=True)
 else:
-    st.warning("Selecciona un rango de fechas válido o verifica tu hoja de Google Sheets.")
+    st.warning("No hay datos que coincidan con los filtros seleccionados.")
