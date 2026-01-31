@@ -10,7 +10,7 @@ st.set_page_config(page_title="Dashboard de Escaneos Multi-Cliente", layout="wid
 # Aquí añadirás los links de cada Google Sheet que vayas creando
 CLIENTES = {
     "Granit": "https://docs.google.com/spreadsheets/d/1nTEL5w5mEMXeyolUC8friEmRCix03aQ8NxYV8R63pLE/edit?gid=0#gid=0",
-    "Cruz": "URL_DE_GOOGLE_SHEET_CRUZ",
+    "Cruz": "https://docs.google.com/spreadsheets/d/1F83LKwGeHxmSqvwqulmJLxx5VxQXYs5_mobIHEAKREQ/edit?gid=0#gid=0",
     # "Nuevo Cliente": "URL_AQUI"
 }
 
@@ -72,4 +72,5 @@ try:
         st.plotly_chart(fig2, use_container_width=True)
 
 except Exception as e:
+
     st.error("No se pudo cargar la hoja. Revisa que el link de Google Sheets sea correcto y tenga permisos de lectura.")
