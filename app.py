@@ -50,7 +50,7 @@ p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50, min_value=0.0
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25, min_value=0.0)
 
 # Función de carga de datos
-@st.cache_data(ttl=10, allow_output_mutation=True)
+@st.cache
 def load_data(url, gid, filters=None):
     try:
         csv_url = f"{url}/export?format=csv&gid={gid}"
@@ -141,14 +141,4 @@ if not df_raw.empty:
     # Descarga de datos
     st.sidebar.divider()
     header = f"""Total Patients Collected: {total_coll}
-Patients Accepted: {acc_n}
-Total Earnings: ${money:.2f}
-
-"""
-    csv_body = df_f[[col_id_name, 'Quality Check (um)', 'Date']].to_csv(index=False)
-    st.sidebar.download_button("📥 Descargar Resumen", header + csv_body, f"Reporte_{client}_{category}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
-
-    with st.expander("🔍 Ver Tabla de Datos"):
-        st.dataframe(df_f.drop(columns=['date_str', 'p_num', 'Week']), use_container_width=True)
-else:
-    st.warning("No hay datos que coincidan con los filtros seleccionados.")
+Patients Accepted: {acc_n
