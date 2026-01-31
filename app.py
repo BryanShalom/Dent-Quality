@@ -4,10 +4,9 @@ import pandas as pd
 import plotly.express as px
 import re
 
-# 1. PAGE CONFIG
 st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
-# 2. CLIENTS & SECRETS
+# 1. CLIENTS & SECRETS
 CLIENTS = {
     "Granit": st.secrets.get("URL_GRANIT", ""),
     "Cruz": st.secrets.get("URL_CRUZ", "")
@@ -17,29 +16,31 @@ st.sidebar.header("Settings")
 selected_client = st.sidebar.selectbox("Select Client", list(CLIENTS.keys()))
 pay_per_scan = st.sidebar.number_input("Payment per approved scan ($/€)", value=0.50, step=0.05)
 
-st.title(f"📊 Scan Quality Monitoring: {selected_client}")
-
-# 3. COLORS & THEME
 quality_colors = {
-    'APPROVED': '#28a745',          # Green
-    'PARTIALLY APROVED': '#ff8c00', # Orange
-    'REPPROVED': '#dc3545'          # Red
+    'APPROVED': '#28a745',
+    'PARTIALLY APROVED': '#ff8c00',
+    'REPPROVED': '#dc3545'
 }
 
-# 4. DATA LOADING FUNCTION (Now supports Sheet Selection)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# 2. FUNCIÓN DE CARGA CON DIAGNÓSTICO
 @st.cache_data(ttl=60)
-def load_sheet_data(url, sheet_name):
+def load_data_with_check(url, sheet_name):
     try:
-        # Load specific worksheet
+        # Intentamos leer la pestaña específica
         df = conn.read(spreadsheet=url, worksheet=sheet_name)
+        
+        if df is None or df.empty:
+            return pd.DataFrame(), f"Sheet '{sheet_name}' is empty or not found."
+
+        # Limpieza de columnas
         df.columns = df.columns.str.strip()
         
-        # Identify naming column (Patient or Cast)
-        col_name = 'Patient' if 'Patient' in df.columns else ('Cast' if 'Cast' in df.columns else df.columns[0])
+        # Buscar columna de ID (Patient o Cast)
+        col_name = next((c for c in df.columns if c in ['Patient', 'Cast']), df.columns[0])
         
-        # Extract Date YYYY_MM_DD
+        # Extraer fecha
         def get_date(text):
             match = re.search(r'(\d{4}_\d{2}_\d{2})', str(text))
             return match.group(1) if match else None
@@ -47,52 +48,67 @@ def load_sheet_data(url, sheet_name):
         df['date_str'] = df[col_name].apply(get_date)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
         df = df.dropna(subset=['Date'])
+        
+        # Agrupar por semana
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         
-        return df, col_name
-    except Exception:
-        return pd.DataFrame(), None
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
-# --- MAIN DASHBOARD LOGIC ---
+# --- LÓGICA PRINCIPAL ---
 current_url = CLIENTS[selected_client]
 
 if not current_url:
-    st.warning("⚠️ Please check your Secrets configuration for the Spreadsheet URL.")
+    st.warning("⚠️ URL not found. Please check your Streamlit Secrets.")
 else:
-    # 5. DEFINE TABS
-    tab1, tab2 = st.tabs(["👤 Patients (Pat)", "🧊 Models (Cast)"])
+    # MOSTRAR TABS
+    tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
-    # Sidebar Filter for Date Range
-    st.sidebar.subheader("Global Date Filter")
-    
     with tab1:
-        # Explicitly load "Pattients Granit" sheet 
-        df_pat, col_p = load_sheet_data(current_url, "Pattients Granit")
+        # Usando el nombre exacto de tus archivos: "Pattients Granit"
+        df_pat, error_pat = load_data_with_check(current_url, "Pattients Granit")
         
         if not df_pat.empty:
-            # Metrics & Charts logic
-            approved = len(df_pat[df_pat['Quality Check (um)'] == 'APPROVED'])
-            st.metric("Total Patient Scans", len(df_pat), f"Payment: ${approved * pay_per_scan:,.2f}")
+            # Filtro de fecha
+            min_d, max_d = df_pat['Date'].min().date(), df_pat['Date'].max().date()
             
-            fig_p = px.bar(df_pat, x='Week', color='Quality Check (um)', 
-                          color_discrete_map=quality_colors, title="Patient Quality Trend")
-            st.plotly_chart(fig_p, use_container_width=True)
+            # Métricas
+            appr = len(df_pat[df_pat['Quality Check (um)'] == 'APPROVED'])
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Patients", len(df_pat))
+            c2.metric("Approved ✅", appr)
+            c3.metric("Total Payment", f"${appr * pay_per_scan:,.2f}")
+            
+            # Gráfico
+            fig = px.bar(df_pat, x='Week', color='Quality Check (um)', 
+                         barmode='group', color_discrete_map=quality_colors)
+            st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_pat)
         else:
-            st.info("No data found in 'Pattients Granit' sheet.")
+            st.error(f"Error loading Patients: {error_pat}")
+            st.info("💡 Hint: Make sure the tab name is exactly 'Pattients Granit' in Google Sheets.")
 
     with tab2:
-        # Explicitly load "Cast Granit" sheet 
-        df_cast, col_c = load_sheet_data(current_url, "Cast Granit")
+        df_cast, error_cast = load_data_with_check(current_url, "Cast Granit")
         
         if not df_cast.empty:
-            # Metrics & Charts logic
-            approved_c = len(df_cast[df_cast['Quality Check (um)'] == 'APPROVED'])
-            st.metric("Total Cast Scans", len(df_cast), f"Payment: ${approved_c * pay_per_scan:,.2f}")
+            appr_c = len(df_cast[df_cast['Quality Check (um)'] == 'APPROVED'])
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Casts", len(df_cast))
+            c2.metric("Approved ✅", appr_c)
+            c3.metric("Total Payment", f"${appr_c * pay_per_scan:,.2f}")
             
             fig_c = px.bar(df_cast, x='Week', color='Quality Check (um)', 
-                          color_discrete_map=quality_colors, title="Cast Quality Trend")
+                           barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig_c, use_container_width=True)
             st.dataframe(df_cast)
         else:
-            st.info("No data found in 'Cast Granit' sheet. Check the sheet name in your Google File.")
+            st.error(f"Error loading Casts: {error_cast}")
+            st.info("💡 Hint: Make sure the tab name is exactly 'Cast Granit'.")
+
+# 3. HERRAMIENTA DE AYUDA (Sidebar)
+with st.sidebar.expander("🔍 Help & Diagnostics"):
+    st.write("If you see errors, verify that:")
+    st.write("1. Sheet names are exactly 'Pattients Granit' and 'Cast Granit'.")
+    st.write("2. The Google Sheet is shared as 'Anyone with the link can view'.")
