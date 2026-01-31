@@ -76,15 +76,14 @@ if not df_raw.empty:
     st.title(f"📊 {selected_client}: {category}")
     
     if not df_filtered.empty:
-        # CÁLCULOS TÉCNICOS
+        # CÁLCULOS
         appr_n = len(df_filtered[df_filtered['Quality Check (um)'] == 'APPROVED'])
         part_n = len(df_filtered[df_filtered['Quality Check (um)'] == 'PARTIALLY APROVED'])
         repr_n = len(df_filtered[df_filtered['Quality Check (um)'] == 'REPROVED'])
         
-        # Lógica de peso: calculamos cuántos "aprobados enteros" valen los parciales
-        # Ejemplo: 1 parcial ($0.25) es 0.5 de un aprobado ($0.50)
+        # Cálculo del total equivalente redondeado a 1 decimal
         ratio = pay_partial / pay_approved if pay_approved > 0 else 0
-        equivalent_total = appr_n + (part_n * ratio)
+        equivalent_total = round(appr_n + (part_n * ratio), 1)
         
         total_money = (appr_n * pay_approved) + (part_n * pay_partial)
 
@@ -92,8 +91,13 @@ if not df_raw.empty:
         m1, m2, m3, m4 = st.columns(4)
         
         m1.metric("Approved ✅", appr_n)
-        # Subtexto dinámico con el valor equivalente (ej. 24.5)
-        st.markdown(f"<p style='color: #666; font-size: 0.85em; margin-top: -25px; font-weight: bold;'>Valor equiv: {equivalent_total:g}</p>", unsafe_allow_html=True)
+        # Subtexto mejorado: más grande y redondeado
+        st.markdown(f"""
+            <div style='margin-top: -25px;'>
+                <span style='color: #555; font-size: 1.1em; font-weight: 500;'>Total Scans: </span>
+                <span style='color: #28a745; font-size: 1.1em; font-weight: 700;'>{equivalent_total}</span>
+            </div>
+        """, unsafe_allow_html=True)
         
         m2.metric("Partial ⚠️", part_n)
         m3.metric("Reproved ❌", repr_n)
