@@ -3,7 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import plotly.express as px
 import re
-import urllib.parse # Nueva librería para manejar espacios en URLs
+from urllib.parse import quote # Para limpiar los espacios en los nombres
 
 st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
@@ -25,20 +25,20 @@ quality_colors = {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. FUNCIÓN DE CARGA CORREGIDA (Maneja espacios en nombres de hojas)
+# 2. FUNCIÓN DE CARGA ROBUSTA
 @st.cache_data(ttl=60)
-def load_data_with_check(url, sheet_name):
+def load_data_safe(url, sheet_name):
     try:
-        # Importante: No pasamos el sheet_name dentro de la URL manual, 
-        # dejamos que la librería lo maneje internamente para evitar el error de "control characters"
+        # Codificamos el nombre de la hoja (Espacios -> %20)
+        safe_sheet_name = quote(sheet_name)
+        
+        # Leemos usando el nombre seguro
         df = conn.read(spreadsheet=url, worksheet=sheet_name)
         
         if df is None or df.empty:
-            return pd.DataFrame(), f"Sheet '{sheet_name}' is empty or not found."
+            return pd.DataFrame(), f"Sheet '{sheet_name}' is empty."
 
         df.columns = df.columns.str.strip()
-        
-        # Identificar columna Patient o Cast
         col_id = 'Patient' if 'Patient' in df.columns else ('Cast' if 'Cast' in df.columns else df.columns[0])
         
         def get_date(text):
@@ -54,45 +54,45 @@ def load_data_with_check(url, sheet_name):
     except Exception as e:
         return pd.DataFrame(), str(e)
 
-# --- LÓGICA PRINCIPAL ---
+# --- DASHBOARD ---
 current_url = CLIENTS[selected_client]
 
 if not current_url:
-    st.warning("⚠️ URL not found in Secrets.")
+    st.warning("⚠️ No URL found in Secrets.")
 else:
     tab1, tab2 = st.tabs(["👤 Patients", "🧊 Models (Cast)"])
 
     with tab1:
-        # El nombre debe coincidir exactamente con Google Sheets
-        df_pat, error_pat = load_data_with_check(current_url, "Pattients Granit")
+        # El nombre debe ser EXACTO al de la pestaña de abajo en tu Excel
+        df_pat, err_pat = load_data_safe(current_url, "Pattients Granit")
         
         if not df_pat.empty:
             appr = len(df_pat[df_pat['Quality Check (um)'] == 'APPROVED'])
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Patients", len(df_pat))
             c2.metric("Approved ✅", appr)
-            c3.metric("Total Payment", f"${appr * pay_per_scan:,.2f}")
+            c3.metric("Estimated Payment", f"${appr * pay_per_scan:,.2f}")
             
             fig = px.bar(df_pat, x='Week', color='Quality Check (um)', 
                          barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_pat)
         else:
-            st.error(f"Error: {error_pat}")
+            st.error(f"Error: {err_pat}")
 
     with tab2:
-        df_cast, error_cast = load_data_with_check(current_url, "Cast Granit")
+        df_cast, err_cast = load_data_safe(current_url, "Cast Granit")
         
         if not df_cast.empty:
             appr_c = len(df_cast[df_cast['Quality Check (um)'] == 'APPROVED'])
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Casts", len(df_cast))
             c2.metric("Approved ✅", appr_c)
-            c3.metric("Total Payment", f"${appr_c * pay_per_scan:,.2f}")
+            c3.metric("Estimated Payment", f"${appr_c * pay_per_scan:,.2f}")
             
             fig_c = px.bar(df_cast, x='Week', color='Quality Check (um)', 
                            barmode='group', color_discrete_map=quality_colors)
             st.plotly_chart(fig_c, use_container_width=True)
             st.dataframe(df_cast)
         else:
-            st.error(f"Error: {error_cast}")
+            st.error(f"Error: {err_cast}")
