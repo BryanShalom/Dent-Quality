@@ -48,20 +48,16 @@ category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
 p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
 p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
 
-# --- CARGA DE DATOS (FILTRADO ESTRICTO PARA CAST) ---
+# --- CARGA DE DATOS ---
 @st.cache_data(ttl=10)
 def load_data(url, gid):
     try:
         csv_url = f"{url}/export?format=csv&gid={gid}"
         df = pd.read_csv(csv_url)
-        
-        # Limpiar nombres de columnas
         df.columns = [str(c).strip() for c in df.columns]
         cid = next((c for c in ['Patient', 'Cast'] if c in df.columns), df.columns[0])
         qcol = 'Quality Check (um)'
         
-        # FILTRO CRÍTICO: Eliminar filas donde el ID o la Calidad estén vacíos
-        # Esto elimina las "filas fantasma" al final de la hoja de Cast
         df = df[df[cid].notna() & df[qcol].notna()].copy()
 
         def process_row(val):
@@ -73,10 +69,7 @@ def load_data(url, gid):
 
         df[['date_str', 'p_num']] = df[cid].apply(process_row)
         df['Date'] = pd.to_datetime(df['date_str'], format='%Y_%m_%d', errors='coerce')
-        
-        # Solo mantener si tiene fecha válida y p_num > 0
         df = df[df['Date'].notna() & (df['p_num'] > 0)].copy()
-        
         df['Week'] = df['Date'].dt.to_period('W').apply(lambda r: r.start_time)
         return df, cid
     except Exception as e:
@@ -106,6 +99,7 @@ if not df_raw.empty:
     total_coll = len(df_f)
     app_n = len(df_f[df_f['Quality Check (um)'] == 'APPROVED'])
     par_n = len(df_f[df_f['Quality Check (um)'] == 'PARTIALLY APROVED'])
+    rep_n = len(df_f[df_f['Quality Check (um)'] == 'REPROVED']) # <--- Nuevo Conteo
     
     ratio = p_par / p_app if p_app > 0 else 0.5
     acc_n = round(app_n + (par_n * ratio), 1)
@@ -113,27 +107,41 @@ if not df_raw.empty:
 
     st.title(f"📊 Dashboard {client}: {category}")
     
-    m1, m2, m3, m4 = st.columns(4)
+    # Se ajusta a 5 columnas para incluir Reproved
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total Collected", total_coll)
     m2.metric("Approved ✅", app_n)
-    st.markdown(f"<div style='margin-top:-25px; margin-left: 25%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='margin-top:-25px; margin-left: 21%;'><span style='color:#555; font-size:1.0em'>Total Scans: </span><span style='color:#28a745; font-size:1.0em; font-weight:700'>{acc_n}</span></div>", unsafe_allow_html=True)
     m3.metric("Partial ⚠️", par_n)
-    m4.metric("Total Earnings", f"${money:,.2f}")
+    m4.metric("Reproved ❌", rep_n) # <--- Métrica Visual
+    m5.metric("Total Earnings", f"${money:,.2f}")
 
     # --- DIAGRAMAS ---
     st.divider()
     col1, col2 = st.columns([2, 1])
-    colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPROVED': '#dc3545'}
+    # Mapa de colores estricto
+    colors = {
+        'APPROVED': '#28a745',          # Verde
+        'PARTIALLY APROVED': '#ff8c00', # Naranja
+        'REPROVED': '#dc3545'           # Rojo
+    }
     
     with col1:
-        st.plotly_chart(px.bar(df_f, x='Week', color='Quality Check (um)', title="Evolución Semanal", barmode='group', color_discrete_map=colors), use_container_width=True)
+        fig_bar = px.bar(df_f, x='Week', color='Quality Check (um)', 
+                         title="Evolución Semanal", barmode='group', 
+                         color_discrete_map=colors)
+        st.plotly_chart(fig_bar, use_container_width=True)
     with col2:
-        st.plotly_chart(px.pie(df_f, names='Quality Check (um)', hole=0.4, title="Calidad", color='Quality Check (um)', color_discrete_map=colors), use_container_width=True)
+        fig_pie = px.pie(df_f, names='Quality Check (um)', hole=0.4, 
+                         title="Calidad Total", color='Quality Check (um)', 
+                         color_discrete_map=colors)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
     # --- DESCARGA ---
     st.sidebar.divider()
     header = f"""Total Patients Collected: {total_coll}
 Patients Accepted: {acc_n}
+Total Reproved: {rep_n}
 Total Earnings: ${money:.2f}
 
 """
