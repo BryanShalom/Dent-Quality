@@ -5,10 +5,17 @@ import re
 
 st.set_page_config(page_title="Scan Quality Dashboard", layout="wide")
 
-# 1. CONFIGURACIÓN DE CLIENTES Y GIDs (Basado en tus enlaces)
+# 1. CONFIGURACIÓN DE CLIENTES, URLs y GIDs
 CLIENTS = {
     "Granit": {
         "url": "https://docs.google.com/spreadsheets/d/1nTEL5w5mEMXeyolUC8friEmRCix03aQ8NxYV8R63pLE",
+        "sheets": {
+            "Patients": "0",
+            "Cast": "224883546"
+        }
+    },
+    "Cruz": {
+        "url": "https://docs.google.com/spreadsheets/d/1F83LKwGeHxmSqvwqulmJLxx5VxQXYs5_mobIHEAKREQ",
         "sheets": {
             "Patients": "0",
             "Cast": "224883546"
@@ -17,6 +24,8 @@ CLIENTS = {
 }
 
 st.sidebar.header("🛠️ Dashboard Control")
+
+# Selector de Cliente (Granit o Cruz)
 selected_client = st.sidebar.selectbox("1. Select Client", list(CLIENTS.keys()))
 
 # Selector de categoría (Patients o Cast)
@@ -29,7 +38,7 @@ quality_colors = {'APPROVED': '#28a745', 'PARTIALLY APROVED': '#ff8c00', 'REPPRO
 @st.cache_data(ttl=60)
 def load_by_gid(base_url, gid):
     try:
-        # Construimos la URL de descarga directa usando el GID proporcionado
+        # Construimos la URL de descarga directa usando el GID
         csv_url = f"{base_url}/export?format=csv&gid={gid}"
         df = pd.read_csv(csv_url)
         
@@ -78,7 +87,7 @@ if not df.empty:
     else:
         df_filtered = df
 
-    st.title(f"📊 {selected_client} Scan Analysis: {category}")
+    st.title(f"📊 {selected_client} Analysis: {category}")
     
     # Métricas principales
     m1, m2, m3 = st.columns(3)
@@ -111,4 +120,4 @@ if not df.empty:
     with st.expander("🔍 View Raw Data Table"):
         st.dataframe(df_filtered.drop(columns=['date_str']), use_container_width=True)
 else:
-    st.warning(f"No data found for {category}. Verify the GID and that the sheet is shared as 'Anyone with the link can view'.")
+    st.warning(f"No data found for {selected_client} - {category}. Verify the GID and Sharing settings.")
