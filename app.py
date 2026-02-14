@@ -45,8 +45,8 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
 
 st.sidebar.divider()
 category = st.sidebar.radio("Categoría", ["Patients", "Cast"])
-p_app = st.sidebar.number_input("Precio Approved ($)", value=0.50)
-p_par = st.sidebar.number_input("Precio Partial ($)", value=0.25)
+p_app = st.sidebar.number_input("Precio Approved ($/€)", value=52)
+p_par = st.sidebar.number_input("Precio Partial ($/€)", value=26)
 
 # --- CARGA Y NORMALIZACIÓN ---
 @st.cache_data(ttl=10)
@@ -138,3 +138,4 @@ if not df_raw.empty:
         st.dataframe(df_f.drop(columns=['date_str', 'p_num', 'Week']), use_container_width=True)
 else:
     st.warning("Sin datos.")
+
